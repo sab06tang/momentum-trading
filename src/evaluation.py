@@ -77,6 +77,37 @@ def plot_performance(returns_df: pd.DataFrame, save_dir: str):
     plt.savefig(os.path.join(save_dir, 'drawdowns.png'), dpi=300)
     plt.close()
 
+def plot_feature_importance(importance_series: pd.Series, save_dir: str):
+    """
+    Visualizes which features (Mom, Vol, Dispersion) drive the ML regime filter.
+    """
+    plt.figure(figsize=(10, 6))
+    importance_series.head(15).plot(kind='barh', color='teal')
+    plt.title('Top 15 Feature Importances (Random Forest)')
+    plt.xlabel('Relative Importance')
+    plt.gca().invert_yaxis()
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, 'feature_importance.png'))
+    plt.close()
+
+def plot_rolling_sharpe(returns_df: pd.DataFrame, window: int = 252):
+    """
+    Plots 1-year rolling Sharpe to show if ML improves stability.
+    """
+    # Annualized Rolling Sharpe: (Mean / Std) * sqrt(252)
+    rolling_sharpe = (returns_df.rolling(window).mean() / returns_df.rolling(window).std()) * np.sqrt(252)
+    
+    plt.figure(figsize=(12, 6))
+    for col in rolling_sharpe.columns:
+        plt.plot(rolling_sharpe[col], label=col)
+    
+    plt.axhline(0, color='black', linestyle='--', alpha=0.3)
+    plt.title(f'Rolling {window}-Day Sharpe Ratio (Comparison)')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.savefig('results/figures/rolling_sharpe.png')
+    plt.close()
+
 if __name__ == "__main__":
     returns_path = 'data/backtest_returns.csv'
     figures_dir = 'results/figures/'

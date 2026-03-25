@@ -4,32 +4,29 @@ import os
 
 def run_backtest(returns: pd.DataFrame, weights: pd.DataFrame, tc: float = 0.001) -> pd.Series:
     """
-    Runs a vectorized backtest with transaction costs.
-    returns: Daily asset returns.
-    weights: Target portfolio weights.
-    tc: Transaction cost per unit of turnover (default 0.1% or 10 bps).
+    Fixed Vectorized Backtest.
+    Note: weights at T are applied to returns at T. 
+    (This is valid because weights[T] was calculated using data[T-1]).
     """
-    # Forward fill weights to handle any missing days, then fillna with 0
-    weights = weights.ffill().fillna(0)
-    
-    # Ensure returns and weights align perfectly
+    # 1. Align returns to weights
     common_idx = returns.index.intersection(weights.index)
     returns = returns.loc[common_idx]
     weights = weights.loc[common_idx]
+
+    # 2. Compute Gross Returns
+    asset_returns = weights * returns
+    gross_returns = asset_returns.sum(axis=1)
+
+    # 3. Compute Turnover (The "Quant" Way)
+    # Drifted weight: Yesterday's weight grown by yesterday's return
+    # This represents what we actually hold before rebalancing today
+    drifted_weight = weights.shift(1) * (1 + returns.shift(1))
+    drifted_weight = drifted_weight.div(drifted_weight.abs().sum(axis=1), axis=0).fillna(0)
     
-    # Calculate daily gross returns
-    # Since our features were shifted by 1 in features.py, the weights for day T 
-    # were calculated using data up to T-1. Thus, it is safe to multiply weights at T by returns at T.
-    gross_returns = (weights * returns).sum(axis=1)
+    turnover = (weights - drifted_weight).abs().sum(axis=1)
+    turnover.iloc[0] = weights.iloc[0].abs().sum() # Initial cost
     
-    # Calculate turnover (absolute change in weights day-over-day)
-    # .shift(1) represents the portfolio we held yesterday.
-    turnover = weights.diff().abs().sum(axis=1)
-    turnover.iloc[0] = weights.iloc[0].abs().sum() # Initial allocation turnover
-    
-    # Calculate net returns
     net_returns = gross_returns - (turnover * tc)
-    
     return net_returns
 
 if __name__ == "__main__":

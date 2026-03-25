@@ -34,41 +34,44 @@ def create_labels(prices: pd.DataFrame, eq_weights: pd.DataFrame, horizon: int =
     
     return labels
 
-def train_and_predict_walk_forward(X: pd.DataFrame, y: pd.Series, model_type: str = 'rf') -> pd.Series:
+def train_and_predict_walk_forward(X: pd.DataFrame, y: pd.Series, model_type: str = 'rf'):
     """
-    Walk-forward training using TimeSeriesSplit to prevent data leakage.
-    Returns out-of-sample probability predictions.
+    Enhanced to support both 'rf' and 'lr' with appropriate scaling.
     """
     print(f"Training walk-forward {model_type.upper()} model...")
     predictions = pd.Series(index=X.index, dtype=float)
-    
-    # 10 expanding windows (e.g., train on 2 years, predict next 1 year, repeat)
     tscv = TimeSeriesSplit(n_splits=10) 
-    
-    if model_type == 'rf':
-        # Restrict depth to prevent overfitting on noisy financial data
-        model = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42, n_jobs=-1)
-    else:
-        model = LogisticRegression(max_iter=1000, random_state=42)
-        
     scaler = StandardScaler()
-    
+
     for train_index, test_index in tscv.split(X):
         X_train, X_test = X.iloc[train_index], X.iloc[test_index]
-        y_train, y_test = y.iloc[train_index], y.iloc[test_index]
+        y_train = y.iloc[train_index]
         
-        # Scale features (fit only on training data!)
+        # Fit scaler ONLY on training data to prevent leakage
         X_train_scaled = scaler.fit_transform(X_train)
         X_test_scaled = scaler.transform(X_test)
         
-        # Train model
+        if model_type == 'rf':
+            model = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42, n_jobs=-1)
+        else:
+        # UPDATED: Remove penalty='l2' to follow the new scikit-learn API 
+        # The default is already L2, and C=1.0 controls the strength.
+            model = LogisticRegression(max_iter=1000, random_state=42)
+            
         model.fit(X_train_scaled, y_train)
-        
-        # Predict probability of class 1 (profitable regime)
         probs = model.predict_proba(X_test_scaled)[:, 1]
         predictions.iloc[test_index] = probs
         
     return predictions
+
+def get_feature_importance(X: pd.DataFrame, y: pd.Series):
+    """
+    Helper for Day 7: Extracting what drives the model.
+    """
+    model = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42)
+    model.fit(X, y) # For global importance, fit on all valid data
+    importance = pd.Series(model.feature_importances_, index=X.columns)
+    return importance.sort_values(ascending=False)
 
 if __name__ == "__main__":
     features_path = 'data/features.csv'
