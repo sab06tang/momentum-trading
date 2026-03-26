@@ -1,59 +1,95 @@
 import pandas as pd
 import numpy as np
 
+
 def calculate_momentum_features(prices: pd.DataFrame) -> pd.DataFrame:
-    """Calculates 3m, 6m, 12m rolling returns and Moving Average distances."""
-    features = pd.DataFrame(index=prices.index)
-    windows = [63, 126, 252] # 3m, 6m, 12m in trading days
-    
-    # 1. Rolling Returns
+    """
+    Rolling returns at 1m, 3m, 6m, 12m horizons (21, 63, 126, 252 trading days).
+    No shift applied here — caller is responsible for lagging before use.
+    """
+    chunks = []
+    windows = [21, 63, 126, 252]  # 1m, 3m, 6m, 12m
+
     for w in windows:
-        rolling_ret = prices.pct_change(periods=w)
-        rolling_ret.columns = [f"{col}_mom_{w}d" for col in prices.columns]
-        features = pd.concat([features, rolling_ret], axis=1)
-        
-    # 2. Moving Averages (50d / 200d distance)
+        ret = prices.pct_change(periods=w)
+        ret.columns = [f"{col}_mom_{w}d" for col in prices.columns]
+        chunks.append(ret)
+
     ma_50 = prices.rolling(50).mean()
     ma_200 = prices.rolling(200).mean()
     ma_dist = (ma_50 / ma_200) - 1
     ma_dist.columns = [f"{col}_ma_dist" for col in prices.columns]
-    features = pd.concat([features, ma_dist], axis=1)
-    
-    return features
+    chunks.append(ma_dist)
+
+    return pd.concat(chunks, axis=1)
+
 
 def calculate_risk_features(prices: pd.DataFrame) -> pd.DataFrame:
-    """Calculates annualized rolling volatility and 1-year drawdown."""
+    """
+    Annualized rolling volatility (21d, 63d) and 1-year drawdown.
+    min_periods=252 on drawdown ensures feature is only defined over a full year.
+    No shift applied here — caller is responsible for lagging before use.
+    """
     daily_returns = prices.pct_change()
-    features = pd.DataFrame(index=prices.index)
-    
+    chunks = []
+
     for w in [21, 63]:
         vol = daily_returns.rolling(window=w).std() * np.sqrt(252)
         vol.columns = [f"{col}_vol_{w}d" for col in prices.columns]
-        features = pd.concat([features, vol], axis=1)
-        
-    rolling_max = prices.rolling(window=252, min_periods=1).max()
+        chunks.append(vol)
+
+    # min_periods=252: no partial-window drawdown during warmup
+    rolling_max = prices.rolling(window=252, min_periods=252).max()
     drawdown = (prices / rolling_max) - 1
     drawdown.columns = [f"{col}_dd_252d" for col in prices.columns]
-    features = pd.concat([features, drawdown], axis=1)
-    
-    return features
+    chunks.append(drawdown)
+
+    return pd.concat(chunks, axis=1)
+
 
 def calculate_cross_asset_features(prices: pd.DataFrame) -> pd.DataFrame:
-    """Calculates cross-asset dispersion (market regime indicator)."""
+    """
+    Cross-sectional return dispersion: rolling mean of daily cross-asset return std.
+    Captures regime transitions (trending vs. mean-reverting environments).
+    No shift applied here — caller is responsible for lagging before use.
+    """
     daily_returns = prices.pct_change()
     dispersion = daily_returns.std(axis=1).rolling(window=21).mean()
-    return pd.DataFrame({"market_dispersion_21d": dispersion})
+    return pd.DataFrame({"market_dispersion_21d": dispersion}, index=prices.index)
+
 
 def build_all_features(prices: pd.DataFrame) -> pd.DataFrame:
-    """Master function to compile all features."""
+    """
+    Compiles all features. Returns unshifted features aligned to their natural date.
+
+    IMPORTANT: Features at row t use price data up to and including day t.
+    Callers MUST shift by the appropriate lag before using as predictors
+    (e.g., .shift(1) in a daily backtest, or resample-then-shift(1) in monthly).
+
+    Drops warmup rows (first ~252 days) where any feature is NaN.
+    """
     print("Building features (Momentum, MAs, Risk, Dispersion)...")
-    features = pd.concat([
+
+    raw = pd.concat([
         calculate_momentum_features(prices),
         calculate_risk_features(prices),
-        calculate_cross_asset_features(prices)
+        calculate_cross_asset_features(prices),
     ], axis=1)
-    
-    # CRITICAL: Shift by 1 to prevent lookahead bias
-    cleaned_features = features.shift(1).dropna()
-    print(f"Feature engineering complete. Usable days: {len(cleaned_features)}")
-    return cleaned_features
+
+    # Guard against inf values from adjusted price edge cases
+    raw = raw.replace([np.inf, -np.inf], np.nan)
+
+    n_before = len(raw)
+    features = raw.dropna(how="any")
+    print(f"  Dropped {n_before - len(features)} warmup rows. "
+          f"Usable days: {len(features)} "
+          f"(from {features.index[0].date()})")
+
+    # Warn if non-contiguous index (mid-series gap — would break downstream .shift())
+    gaps = features.index.to_series().diff().dt.days.dropna()
+    large_gaps = gaps[gaps > 5]
+    if not large_gaps.empty:
+        print(f"  [WARN] {len(large_gaps)} gaps >5 days in feature index. "
+              f"Downstream .shift() will be misaligned across these gaps.")
+
+    return features

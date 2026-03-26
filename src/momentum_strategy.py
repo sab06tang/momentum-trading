@@ -1,33 +1,115 @@
 import pandas as pd
 import numpy as np
 
+
+def calculate_momentum_score(features: pd.DataFrame, assets: list) -> pd.DataFrame:
+    """
+    Composite momentum score: average cross-sectional z-score across 1m, 3m, 6m, 12m.
+
+    Cross-sectional z-scoring at each date means the signal captures relative
+    momentum strength (which assets are strongest) not just absolute direction.
+    Returns raw scores — not yet binarized.
+    """
+    windows = [21, 63, 126, 252]
+    missing = [
+        f"{a}_mom_{w}d"
+        for a in assets for w in windows
+        if f"{a}_mom_{w}d" not in features.columns
+    ]
+    if missing:
+        raise KeyError(f"Missing momentum columns in features: {missing}")
+
+    score_chunks = []
+    for w in windows:
+        mom_cols = [f"{a}_mom_{w}d" for a in assets]
+        mom = features[mom_cols].copy()
+        mom.columns = assets
+        cross_mean = mom.mean(axis=1)
+        cross_std = mom.std(axis=1).replace(0, np.nan)
+        z = mom.sub(cross_mean, axis=0).div(cross_std, axis=0)
+        score_chunks.append(z)
+
+    composite = pd.concat(score_chunks).groupby(level=0).mean()
+    return composite.reindex(features.index)
+
+
 def generate_trend_signals(features: pd.DataFrame, assets: list) -> pd.DataFrame:
     """
-    Generates binary signals: Long (1) if 12m momentum > 0, Flat/Cash (0) otherwise.
-    Avoiding Short (-1) prevents massive drag during equity bull markets.
+    Binary long/flat signals derived from composite momentum score.
+    Long (1) if composite z-score > 0, Flat/Cash (0) otherwise.
+
+    NOTE: `features` must already be lagged by the caller before passing in.
     """
-    signals = pd.DataFrame(index=features.index)
-    for asset in assets:
-        mom_12m_col = f"{asset}_mom_252d"
-        signals[asset] = np.where(features[mom_12m_col] > 0, 1, 0)
+    scores = calculate_momentum_score(features, assets)
+    signals = (scores > 0).astype(int)
     return signals
 
-def calculate_inverse_vol_weights(signals: pd.DataFrame, features: pd.DataFrame, assets: list) -> pd.DataFrame:
-    """Allocates capital inversely proportional to 63-day volatility."""
-    raw_weights = pd.DataFrame(index=signals.index)
+
+def calculate_inverse_vol_weights(
+    signals: pd.DataFrame,
+    features: pd.DataFrame,
+    assets: list,
+    max_weight: float = 0.40,
+) -> pd.DataFrame:
+    """
+    Inverse-volatility position sizing using 63d realized vol.
+
+    Weights are capped at max_weight per asset and re-normalized.
+    When all signals are 0, all weights are 0 (100% cash).
+
+    Parameters
+    ----------
+    max_weight : per-asset cap before renormalization (default 40%)
+    """
+    missing_vols = [f"{a}_vol_63d" for a in assets if f"{a}_vol_63d" not in features.columns]
+    if missing_vols:
+        raise KeyError(f"Missing volatility columns: {missing_vols}")
+
+    raw = pd.DataFrame(index=signals.index, columns=assets, dtype=float)
     for asset in assets:
-        vol_col = f"{asset}_vol_63d"
-        inv_vol = 1.0 / (features[vol_col] + 1e-6)
-        raw_weights[asset] = signals[asset] * inv_vol
+        inv_vol = 1.0 / (features[f"{asset}_vol_63d"] + 1e-6)
+        raw[asset] = signals[asset] * inv_vol
 
-    row_sums = raw_weights.sum(axis=1)
-    # Normalize, but if row_sum is 0 (all signals are 0), keep weights at 0 (100% Cash)
-    weights = raw_weights.div(row_sums.replace(0, 1e-6), axis=0)
-    return weights.fillna(0)
+    row_sums = raw.sum(axis=1)
+    weights = raw.div(row_sums.where(row_sums != 0, other=np.nan), axis=0).fillna(0.0)
 
-def generate_random_strategy(index, columns) -> pd.DataFrame:
-    """Random coin-flip strategy for benchmark ablation."""
-    random_signals = pd.DataFrame(np.random.choice([0, 1], size=(len(index), len(columns))), 
-                                  index=index, columns=columns)
-    row_sums = random_signals.sum(axis=1)
-    return random_signals.div(row_sums.replace(0, 1e-6), axis=0).fillna(0)
+    # Cap and renormalize
+    weights = weights.clip(upper=max_weight)
+    row_sums_post = weights.sum(axis=1)
+    weights = weights.div(
+        row_sums_post.where(row_sums_post != 0, other=np.nan), axis=0
+    ).fillna(0.0)
+
+    high_conc = (weights.max(axis=1) > 0.50).sum()
+    if high_conc > 0:
+        print(f"  [WARN] {high_conc} dates with single-asset weight > 50% post-cap. "
+              f"Review vol inputs.")
+
+    return weights
+
+
+def generate_equal_weight_baseline(index: pd.Index, assets: list) -> pd.DataFrame:
+    """
+    Passive equal-weight long-only benchmark.
+    Primary ablation baseline — momentum must beat this before ML is justified.
+    """
+    return pd.DataFrame(1.0 / len(assets), index=index, columns=assets)
+
+
+def generate_random_strategy(
+    index: pd.Index,
+    assets: list,
+    seed: int = 42,
+) -> pd.DataFrame:
+    """
+    Coin-flip benchmark (sanity floor only — not a valid ablation baseline).
+    Uses isolated RNG to avoid polluting global numpy/sklearn random state.
+    """
+    rng = np.random.default_rng(seed)
+    raw = pd.DataFrame(
+        rng.integers(0, 2, size=(len(index), len(assets))).astype(float),
+        index=index,
+        columns=assets,
+    )
+    row_sums = raw.sum(axis=1).replace(0, np.nan)
+    return raw.div(row_sums, axis=0).fillna(0.0)

@@ -1,4 +1,4 @@
-# Cross-Asset Momentum & ML Tail-Risk Filter
+# Cross-Asset Momentum Trading with ML Filter
 
 This repository implements a quantitative trading pipeline that applies a Machine Learning regime filter to a Cross-Asset Time-Series Momentum strategy. 
 
