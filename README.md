@@ -1,82 +1,254 @@
-# Cross-Asset Momentum Trading with ML Filter
+# Cross-Asset Time-Series Momentum with ML Regime Filter
 
-This repository implements a quantitative trading pipeline that applies a Machine Learning regime filter to a Cross-Asset Time-Series Momentum strategy. 
+A quantitative trading strategy combining systematic momentum signals across a
+multi-asset universe with a machine learning regime overlay. Built to
+institutional standards: walk-forward validation, explicit signal lagging,
+transaction cost modelling, and a clean ablation study isolating the ML
+contribution.
 
-The primary objective of this project is to build a robust, historically tested trading strategy that captures the momentum risk premium while utilizing supervised learning to dynamically detect and avoid severe market crashes (tail-risk).
+---
 
-## 🚀 Key Findings
-* **Momentum Works:** The base volatility-scaled momentum strategy successfully reduced portfolio maximum drawdown to -29.61% compared to the S&P 500's -33.72%, while maintaining a strong Sharpe Ratio (0.65).
-* **Linear vs. Non-Linear ML:** In predicting market crashes, a simple **Logistic Regression** model outperformed a **Random Forest** classifier. The Random Forest overfit to financial noise, while the linear nature of Logistic Regression robustly identified true panic regimes.
-* **The "Crash Detector" Value:** The Logistic Regression overlay successfully ejected the portfolio from the market during high-risk environments, slashing annualized volatility to **9.61%** and compressing the Maximum Drawdown to **-23.15%**.
+## Results (January 2011 – March 2026)
 
-## 🧠 Methodology
+| Strategy | Ann. Return | Ann. Vol | Sharpe | Sortino | Max DD | Calmar |
+|:---|---:|---:|---:|---:|---:|---:|
+| Equal-Weight Buy & Hold | 8.4% | 12.0% | 0.57 | 0.70 | -25.3% | 0.33 |
+| SPY Buy & Hold | 13.4% | 17.1% | 0.70 | 0.81 | -33.7% | 0.40 |
+| **Momentum Only** | **12.3%** | **13.2%** | **0.79** | **1.00** | **-24.8%** | **0.50** |
+| Momentum + Logistic Reg. | 7.9% | 11.2% | 0.55 | 0.60 | -24.8% | 0.32 |
+| Momentum + Random Forest | 8.9% | 11.9% | 0.60 | 0.68 | -24.8% | 0.36 |
+| Random Sanity Check | 7.0% | 15.1% | 0.39 | 0.42 | -33.3% | 0.21 |
 
-### 1. Universe & Data
-The strategy trades a diversified cross-asset universe from 2010 to present to capture multiple macroeconomic regimes (bull markets, rate hike cycles, and crashes).
-* **Equities:** SPY (S&P 500), QQQ (Nasdaq 100)
-* **Bonds:** TLT (20+ Year Treasuries)
-* **Commodities:** GLD (Gold), USO (Crude Oil)
+> **Key finding:** The momentum-only strategy achieves the highest risk-adjusted
+> performance (Sharpe 0.79, Sortino 1.00), outperforming SPY on every
+> risk-adjusted metric while incurring a smaller maximum drawdown (−24.8% vs
+> −33.7%). The ML regime filter reduces volatility but also reduces returns
+> sufficiently to lower the Sharpe ratio — a valid and expected result in a
+> predominantly trending market (discussed below).
 
-### 2. Feature Engineering (Strictly Avoids Lookahead Bias)
-All features are calculated using $T$ data and shifted to $T+1$ before any signal generation or model training occurs.
-* **Momentum:** 3-month, 6-month, and 12-month rolling returns; 50-day / 200-day Moving Average divergence.
-* **Risk:** 21-day and 63-day annualized volatility; 252-day rolling maximum drawdown.
-* **Macro:** 21-day Cross-Asset Dispersion (measuring underlying market correlation).
+---
 
-### 3. Base Strategy: Volatility-Scaled Momentum
-* **Signal:** Long (100%) if 12-month momentum is positive. Cash (0%) if momentum is negative. (Shorting was excluded to prevent severe drag during equity bull markets).
-* **Position Sizing:** Target weights are calculated inversely proportional to 63-day historical volatility (Risk Parity-lite) to prevent highly volatile assets (e.g., USO) from dominating portfolio variance.
+## Strategy Architecture
 
-### 4. Machine Learning "Crash Detector" Overlay
-Instead of predicting generic forward returns (which is notoriously noisy), the ML component is trained strictly as a tail-risk filter.
-* **Labeling:** Forward 63-day returns are evaluated. If returns drop below -2%, the regime is labeled `0` (CRASH). Otherwise, `1` (SAFE).
-* **Validation:** Models are trained using `TimeSeriesSplit` (Walk-Forward Validation) to ensure no data leakage.
-* **Trinary Risk Switch:** The ML probabilities dynamically scale portfolio exposure:
-  * **> 50% Confidence:** 100% Target Allocation
-  * **35% - 50% Confidence:** 50% Target Allocation (Risk Reduction)
-  * **< 35% Confidence:** 0% Allocation (Eject to Cash)
+### Universe
+Five liquid ETFs providing cross-asset exposure:
 
-## 📊 Backtest & Ablation Study Results
-The backtester includes realistic constraints: **Monthly Rebalancing** and **10 bps (0.1%) transaction costs** applied to portfolio turnover.
+| Ticker | Asset Class | Role |
+|:---|:---|:---|
+| SPY | US Large-Cap Equity | Risk-on core |
+| QQQ | US Technology Equity | High-momentum growth |
+| TLT | Long-Duration Treasuries | Flight-to-quality / diversifier |
+| GLD | Gold | Inflation hedge / tail risk |
+| USO | Crude Oil | Commodity momentum |
 
-| Strategy                | Ann. Return | Ann. Volatility | Sharpe Ratio | Max Drawdown |
-|:------------------------|:------------|:----------------|-------------:|:-------------|
-| 1_Buy_Hold_SPY          | 13.39%      | 17.11%          |         0.78 | -33.72%      |
-| 2_Random_Benchmark      | 3.72%       | 15.98%          |         0.23 | -37.18%      |
-| 3_Base_Momentum         | 7.98%       | 12.28%          |         0.65 | -29.61%      |
-| **4_ML_Logistic_Mom** | **3.70%** | **9.61%** |     **0.39** | **-23.15%** |
-| 5_ML_RandomForest_Mom   | 6.02%       | 11.85%          |         0.51 | -29.61%      |
+### Signal Generation
+Composite momentum score averaging cross-sectional z-scores across four
+lookback windows (1m / 3m / 6m / 12m). Cross-sectional z-scoring at each date
+ensures the signal captures *relative* momentum strength across assets, not just
+absolute direction. Binary long/flat signal: long when composite z-score > 0,
+flat (cash) otherwise.
 
-*Note on Returns vs. Risk: The reduction in absolute return for the ML Logistic strategy represents the "cost of insurance" paid to remain in cash during highly uncertain environments, ultimately resulting in a highly stable, leveragable equity curve.*
+### Position Sizing
+Inverse-volatility weighting using 63-day realised volatility, capped at 40%
+per asset to prevent excessive concentration in low-vol assets (typically TLT).
+Weights are re-normalised after capping; residual allocation sits in cash.
 
-## 📈 Visual Analytics & Insights
+### ML Regime Overlay
+A binary classifier predicts whether the momentum strategy's forward 21-day
+return will exceed the expanding-window historical median. When the model
+signals an unfavorable regime, position sizes are scaled to 50% or 0% of their
+momentum-only values.
 
-### 1. Tail-Risk Mitigation (Drawdowns)
-![Strategy Drawdowns](results/figures/drawdowns.png)
-The defining success of the ML overlay (Red Line) is its behavior during severe market stress. During the 2020 COVID crash and the 2022 bear market, the Logistic Regression filter successfully ejected the portfolio to cash or reduced exposure, resulting in dramatically shallower drawdowns compared to the S&P 500 (Blue) and the base momentum strategy (Green). 
+Two models trained in parallel:
+- **Logistic Regression** — interpretable baseline with L2 regularisation
+- **Random Forest** — nonlinear benchmark (200 trees, max depth 3,
+  balanced class weights)
 
-### 2. The "Cost of Insurance" (Equity Curve)
-![Cumulative Equity Curve](results/figures/equity_curve.png)
-The log-scale equity curve perfectly illustrates the trade-off of the crash detector. While the Buy & Hold SPY benchmark achieves the highest absolute return, it does so with massive volatility. The ML Logistic strategy provides a much smoother, defensive compounding curve—sacrificing peak bull-market returns for downside protection.
+Both trained with strict **walk-forward (time-series) cross-validation** —
+no shuffling, no future data in any training fold.
 
-### 3. Regime Identification
-![Regime Visualization](results/figures/regime_visualization.png)
-Overlaying the ML's "Favorable Regime" signal (Green Shading) on top of the SPY price action proves the model is not acting randomly. The model cleanly cuts exposure (white spaces) during the late 2018 rate panic, the 2020 flash crash, and the protracted 2022 tech drawdown.
+### Rebalancing & Execution
+- Monthly rebalancing at business month-end close
+- Daily weight drift between rebalances (weights evolve with market moves)
+- 10 bps one-way transaction cost applied at each rebalance
+- 1-day execution lag: signals computed at close of day *t*, positions entered
+  at close of day *t+1*
 
-### 4. Feature Importance Insights
-![Feature Importance](results/figures/feature_importance.png)
-The Random Forest feature importance chart reveals that **Treasury Bonds (TLT)** are the strongest leading indicators of market crashes. `TLT_ma_dist` (Treasury moving average distance) and `TLT_mom_252d` (Treasury 12-month momentum) were the most predictive features, highlighting the economic reality of "flight to safety" dynamics preceding severe equity drawdowns.
+---
 
-### 5. Risk-Adjusted Stability
-![Rolling Sharpe Ratio](results/figures/rolling_sharpe.png)
-The 252-day Rolling Sharpe ratio demonstrates how the ML strategy behaves under the hood. The horizontal "flat-lining" of the Logistic ML strategy (Red Line) precisely during periods where the benchmark Sharpe ratio plunges negative proves the effectiveness of the `0% Eject` switch. The strategy actively zeroes out its variance rather than absorbing losses.
+## Methodology
 
-## 🏗️ Project Architecture
+### Lookahead Bias Prevention
+Every layer of the pipeline enforces strict temporal separation:
 
-* `data_loader.py`: Handles fetching and cleaning of Yahoo Finance data.
-* `features.py`: Computes rolling momentum, volatility, and dispersion metrics.
-* `momentum_strategy.py`: Generates the base trend-following signals and volatility-scaled weights.
-* `ml_model.py`: Generates forward-looking labels and executes Walk-Forward training for LR and RF models.
-* `backtest.py`: Vectorized backtesting engine with realistic monthly rebalancing and turnover-based transaction costs.
-* `evaluation.py`: Computes core metrics (Sharpe, Drawdown) and generates matplotlib visualizations.
-* `main.py`: The orchestrator script that ties the pipeline together.
+```
+prices[t]           → features[t]       (data through close of day t only)
+features[t]         → signals[t]        (momentum score using features[t])
+signals[t]          → weights[t]        (inv-vol sizing at close of day t)
+weights[t]          → label[t]          (fwd return t+1..t+21 — no overlap)
+features[t]+label[t]→ ml_probs[t]       (walk-forward OOS only)
+weights[t]×regime[t]→ portfolio[t]      
+portfolio[t]        → return[t+1]       (shift(1) execution lag in backtest)
+```
+
+No row in any training set contains information from its own test window.
+
+### ML Validation: Walk-Forward with Gap Purging
+`TimeSeriesSplit(n_splits=10, gap=21, test_size=252)` — the `gap=21` parameter
+is critical. Without it, the last 21 training labels overlap with the test
+period (they include returns from days *inside* the test window), creating
+direct data leakage. The gap purges this overlap exactly.
+
+Each test fold covers approximately one calendar year, giving 10 independent
+out-of-sample evaluation periods across the full history.
+
+### Label Construction: Expanding-Window Median Split
+Labels use an **expanding-window median** rather than a fixed return threshold.
+A fixed threshold (e.g. −2%) produces severe class imbalance in trending
+markets (>95% positive labels in a post-2010 bull market), causing the model to
+learn a degenerate always-positive predictor. The expanding median adapts to
+each market regime and consistently produces ~50/50 class balance
+(observed: 53% positive), enabling genuine discriminative learning.
+
+### Feature Engineering
+36 features across four categories:
+
+| Category | Features |
+|:---|:---|
+| Momentum | Rolling returns at 21d, 63d, 126d, 252d × 5 assets = 20 features |
+| Moving Average | 50d/200d MA distance × 5 assets = 5 features |
+| Volatility | 21d and 63d annualised vol × 5 assets = 10 features |
+| Drawdown | 252d drawdown × 5 assets = 5 features |
+| Cross-asset | 21d rolling dispersion of daily returns = 1 feature |
+
+All features computed with `min_periods` equal to the full window length —
+no partial-window values during warmup. The top five features by RF importance:
+GLD MA distance, QQQ 63d volatility, GLD 12m momentum, QQQ 1m momentum,
+SPY 1y drawdown.
+
+---
+
+## Ablation Study: Isolating the ML Contribution
+
+The ablation is ordered by increasing complexity:
+
+```
+Random (sanity floor)   →  Sharpe 0.39
+Equal-weight passive    →  Sharpe 0.57  (+0.18 vs random)
+SPY buy & hold          →  Sharpe 0.70
+Momentum only           →  Sharpe 0.79  (+0.22 vs SPY — momentum premium)
+Momentum + Logistic     →  Sharpe 0.55  (−0.24 vs momentum only)
+Momentum + RF           →  Sharpe 0.60  (−0.19 vs momentum only)
+```
+
+**Interpretation:** The ML overlay does not add value over the 2011–2026 sample
+period. This is a statistically honest result, not an implementation failure.
+Three mechanisms explain it:
+
+1. **Bull market bias.** The ML filter reduces gross exposure (active 83–94% of
+   days). In a period where momentum almost always pays, reducing exposure
+   mechanically reduces returns without a commensurate reduction in drawdown
+   (max drawdown is identical across all momentum variants at −24.8%, because
+   drawdowns occur within regimes labelled "favorable" by the model).
+
+2. **Regime signal lead time.** A 21-day forward return label trained to predict
+   the *median* of the distribution is a difficult classification problem in
+   near-efficient markets. The model has low predictive accuracy OOS, and
+   a noisy filter hurts more than it helps.
+
+3. **Transaction cost asymmetry.** Regime-scaled weights change the rebalance
+   target at each monthly reset. Even with 5-day probability smoothing, the ML
+   strategies incur approximately 15× more rebalance turnover than the
+   momentum-only strategy (~7x vs ~0.5x annualised one-way).
+
+The correct conclusion is that **the momentum signal itself is the alpha
+source**, and that ML regime filtering requires either a longer history spanning
+multiple full cycles, or a better-specified prediction target (e.g. tail-risk
+drawdown events rather than median forward return).
+
+---
+
+## Project Structure
+
+```
+momentum-trading/
+├── src/
+│   ├── data_loader.py          # yfinance download, adjusted prices, validation
+│   ├── features.py             # momentum, MA, vol, drawdown, dispersion features
+│   ├── momentum_strategy.py    # composite z-score signals, inv-vol weighting
+│   ├── ml_model.py             # label creation, walk-forward training, importances
+│   ├── backtest.py             # vectorised backtest, daily drift, TC modelling
+│   ├── evaluation.py           # metrics, ablation table, all visualisations
+│   └── main.py                 # pipeline orchestration
+└── results/
+    └── figures/
+        ├── equity_curve.png
+        ├── drawdowns.png
+        ├── rolling_sharpe.png
+        ├── regime_visualization.png
+        └── feature_importance.png
+```
+
+---
+
+
+## Key Design Decisions
+
+**Why long/flat, not long/short?**  
+Shorting individual asset ETFs introduces significant borrow costs and
+diverges from how most institutional cross-asset momentum strategies are
+implemented. Long/flat with cash better represents the strategy's risk profile
+and avoids massive drag during equity bull markets.
+
+**Why inverse-volatility weighting?**  
+Inverse-vol normalises each position's risk contribution without requiring a
+full covariance matrix estimate (which is noisy in a 5-asset universe). It is
+the standard position-sizing approach in AQR-style momentum strategies.
+
+**Why composite z-score across lookbacks?**  
+Single-lookback momentum is sensitive to the chosen window. Averaging
+cross-sectional z-scores across 1m/3m/6m/12m is more robust and reflects
+the standard multi-horizon approach in the academic momentum literature.
+
+**Why expanding-window median labels?**  
+A fixed return threshold produces severely imbalanced labels in trending
+markets, causing degenerate classifiers. The expanding median self-calibrates
+to the current market regime while maintaining strict temporal separation.
+
+---
+
+## Limitations and Future Work
+
+- **Sample period:** 2011–2026 is predominantly a US equity bull market.
+  Performance across a full cycle (including 2000–2002, 2007–2009) would
+  require extending the universe to indices with longer histories.
+
+- **Survivorship bias:** The five tickers were selected with knowledge of their
+  existence through 2026. A production implementation would use a point-in-time
+  universe construction.
+
+- **ML signal quality:** The regime classifier's predictive accuracy is not
+  reported. Adding precision/recall curves and calibration plots per fold would
+  better characterise where the model adds and destroys value.
+
+- **Alternative ML targets:** Predicting tail-risk events (e.g. rolling max
+  drawdown > 5% in next 21 days) rather than the median return split may
+  produce a filter that adds value even in trending markets by protecting
+  specifically against sharp drawdowns.
+
+- **Transaction cost sensitivity:** A TC sweep (0–30 bps) would show the
+  breakeven cost at which each strategy becomes unviable — relevant for
+  comparing futures vs. ETF implementation.
+
+---
+
+## References
+
+- Jegadeesh, N. & Titman, S. (1993). *Returns to Buying Winners and Selling
+  Losers.* Journal of Finance.
+- Asness, C., Moskowitz, T. & Pedersen, L. (2013). *Value and Momentum
+  Everywhere.* Journal of Finance.
+- Moskowitz, T., Ooi, Y. & Pedersen, L. (2012). *Time Series Momentum.*
+  Journal of Financial Economics.
+- Hurst, B., Ooi, Y. & Pedersen, L. (2017). *A Century of Evidence on
+  Trend-Following Investing.* AQR White Paper.

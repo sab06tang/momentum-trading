@@ -1,85 +1,183 @@
 import pandas as pd
 import numpy as np
 import os
+
 from data_loader import load_data
 from features import build_all_features
-from momentum_strategy import generate_trend_signals, calculate_inverse_vol_weights, generate_random_strategy
+from momentum_strategy import (
+    generate_trend_signals,
+    calculate_inverse_vol_weights,
+    generate_equal_weight_baseline,
+    generate_random_strategy,
+)
 from ml_model import create_labels, train_and_predict_walk_forward, get_feature_importance
 from backtest import run_backtest
-from evaluation import calculate_metrics, plot_performance, plot_rolling_sharpe, plot_regime_visualization, plot_feature_importance
+from evaluation import (
+    compare_strategies,
+    plot_performance,
+    plot_rolling_sharpe,
+    plot_regime_visualization,
+    plot_feature_importance,
+)
 
-def main():
-    # Configuration matches prompt universe strictly
-    tickers = ['SPY', 'QQQ', 'TLT', 'GLD', 'USO']
-    start_date = '2010-01-01'
-    results_dir = 'results/figures/'
-    
-    # 1. Pipeline
-    prices = load_data(tickers, start_date)
-    features_df = build_all_features(prices)
-    
-    # 2. Base Strategies
-    signals = generate_trend_signals(features_df, tickers)
-    base_weights = calculate_inverse_vol_weights(signals, features_df, tickers)
-    random_weights = generate_random_strategy(base_weights.index, tickers)
-    
-    # 3. ML Labeling & Training
-    labels = create_labels(prices, base_weights, horizon=21, threshold=0.000)
-    common_idx = features_df.index.intersection(labels.dropna().index)
-    X_clean, y_clean = features_df.loc[common_idx], labels.loc[common_idx]
+# ── Configuration ─────────────────────────────────────────────────────────────
+TICKERS        = ["SPY", "QQQ", "TLT", "GLD", "USO"]
+START_DATE     = "2010-01-01"
+RESULTS_DIR    = "results/figures/"
+RISK_FREE_RATE = 0.02
 
-    print(f"Alignment complete. Training on {len(X_clean)} days.")
-    rf_probs = train_and_predict_walk_forward(X_clean, y_clean, model_type='rf')
-    lr_probs = train_and_predict_walk_forward(X_clean, y_clean, model_type='lr')
-    
-    # Smooth probabilities to prevent transaction cost whipsawing
-    rf_smooth = rf_probs.reindex(base_weights.index).ffill().fillna(0).rolling(window=5).mean()
-    lr_smooth = lr_probs.reindex(base_weights.index).ffill().fillna(0).rolling(window=5).mean()
+LABEL_HORIZON    = 21
+LABEL_THRESHOLD  = -0.02      # only used when LABEL_TYPE = "threshold"
+LABEL_TYPE       = "median"   # ← NEW: "median" self-balances; avoids 96% pos rate
+TC               = 0.001
+ML_PROB_THRESHOLD    = 0.50
+ML_PROB_PARTIAL      = 0.35
+ML_SMOOTHING_WINDOW  = 5
+MAX_ASSET_WEIGHT     = 0.40
 
-    rf_regime = pd.Series(
-        np.where(rf_smooth > 0.50, 1.0, np.where(rf_smooth > 0.35, 0.5, 0.0)), 
-        index=rf_smooth.index
+
+def build_ml_regime(
+    probs: pd.Series,
+    target_index: pd.Index,
+    high: float = ML_PROB_THRESHOLD,
+    low: float  = ML_PROB_PARTIAL,
+    smooth: int = ML_SMOOTHING_WINDOW,
+) -> pd.Series:
+    """
+    Converts raw walk-forward probabilities into a {0, 0.5, 1.0} regime scalar.
+
+    Warmup rows (NaN predictions) default to 1.0 — full momentum exposure.
+    Smoothing window reduces transaction cost drag from daily regime flips.
+    """
+    filled = probs.reindex(target_index).ffill().fillna(1.0)  # warmup → full exposure
+    smoothed = filled.rolling(window=smooth, min_periods=1).mean()
+    regime = pd.Series(
+        np.where(smoothed > high, 1.0, np.where(smoothed > low, 0.5, 0.0)),
+        index=smoothed.index,
     )
-    lr_regime = pd.Series(
-        np.where(lr_smooth > 0.50, 1.0, np.where(lr_smooth > 0.35, 0.5, 0.0)), 
-        index=lr_smooth.index
+    on_pct = (regime > 0).mean()
+    print(f"  Regime filter active {on_pct:.1%} of days "
+          f"({(regime == 1.0).mean():.1%} full / "
+          f"{(regime == 0.5).mean():.1%} half / "
+          f"{(regime == 0.0).mean():.1%} off)")
+    return regime
+
+
+def main() -> None:
+
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+
+    # ── 1. Data ───────────────────────────────────────────────────────────────
+    prices = load_data(TICKERS, START_DATE)
+
+    # ── 2. Features ───────────────────────────────────────────────────────────
+    features_daily = build_all_features(prices)
+
+    # ── 3. Momentum signals & base weights ───────────────────────────────────
+    signals      = generate_trend_signals(features_daily, TICKERS)
+    base_weights = calculate_inverse_vol_weights(
+        signals, features_daily, TICKERS, max_weight=MAX_ASSET_WEIGHT
     )
-    
+
+    # ── 4. ML labels & walk-forward training ─────────────────────────────────
+    labels = create_labels(
+    prices, base_weights,
+    horizon=LABEL_HORIZON,
+    threshold=LABEL_THRESHOLD,
+    label_type=LABEL_TYPE,        # ← NEW
+    )
+
+    common_idx = features_daily.index.intersection(labels.dropna().index)
+    X_ml = features_daily.loc[common_idx]
+    y_ml = labels.loc[common_idx]
+    print(f"\nML training set: {len(X_ml)} days "
+          f"({X_ml.index[0].date()} → {X_ml.index[-1].date()})")
+
+    rf_probs = train_and_predict_walk_forward(
+        X_ml, y_ml, model_type="rf",       horizon=LABEL_HORIZON
+    )
+    lr_probs = train_and_predict_walk_forward(
+        X_ml, y_ml, model_type="logistic", horizon=LABEL_HORIZON
+    )
+
+    # ── 5. ML regime scaling ──────────────────────────────────────────────────
+    print("\nBuilding ML regime signals...")
+    rf_regime = build_ml_regime(rf_probs, base_weights.index)
+    lr_regime = build_ml_regime(lr_probs, base_weights.index)
+
     ml_rf_weights = base_weights.multiply(rf_regime, axis=0)
     ml_lr_weights = base_weights.multiply(lr_regime, axis=0)
 
-    # 4. Monthly Backtesting (0.1% transaction cost)
-    daily_rets = prices.pct_change().dropna()
-    print("\nRunning strategy backtests with Monthly Rebalancing...")
-    
-    results = pd.DataFrame({
-        '1_Buy_Hold_SPY': daily_rets['SPY'],
-        '2_Random_Benchmark': run_backtest(daily_rets, random_weights),
-        '3_Base_Momentum': run_backtest(daily_rets, base_weights),
-        '4_ML_Logistic_Mom': run_backtest(daily_rets, ml_lr_weights),
-        '5_ML_RandomForest_Mom': run_backtest(daily_rets, ml_rf_weights)
-    }).dropna()
+    # ── 6. Backtests ──────────────────────────────────────────────────────────
+    # Trim daily_rets to the first date weights are available.           ← FIXED
+    # base_weights starts after the 252-day feature warmup (~1 year).
+    # Without this, run_backtest raises ValueError on leading NaN weights.
+    weights_start = base_weights.index[0]
+    daily_rets = prices.pct_change().dropna().loc[weights_start:]       # ← FIXED
 
-    # 5. Visualization & Metrics
-    plot_performance(results, results_dir)
-    plot_rolling_sharpe(results, results_dir) 
-    plot_regime_visualization(prices['SPY'], rf_regime, results_dir)
-    plot_feature_importance(get_feature_importance(X_clean, y_clean), results_dir)
+    print("\nRunning backtests...")
 
-    print("\n" + "="*85)
-    print("PERFORMANCE SUMMARY")
-    print("="*85)
+    results_dict = {
+        "1_EqualWeight_BuyHold": run_backtest(
+            daily_rets,
+            generate_equal_weight_baseline(daily_rets.index, TICKERS),
+            tc=TC,
+        ),
+        "2_SPY_BuyHold":    daily_rets["SPY"],
+        "3_Momentum_Only":  run_backtest(daily_rets, base_weights, tc=TC),
+        "4_Mom_LogReg":     run_backtest(daily_rets, ml_lr_weights, tc=TC),
+        "5_Mom_RF":         run_backtest(daily_rets, ml_rf_weights, tc=TC),
+        "6_Random_Sanity":  run_backtest(
+            daily_rets,
+            generate_random_strategy(daily_rets.index, TICKERS),
+            tc=TC,
+        ),
+    }
+    results_df = pd.DataFrame(results_dict)
 
-    summary_df = pd.DataFrame([
-        {**calculate_metrics(results[col]), 'Strategy': col} 
-        for col in results.columns
-    ])
-    
-    cols = ['Strategy', 'Ann. Return', 'Ann. Volatility', 'Sharpe Ratio', 'Max Drawdown']
+    ml_start = results_df.apply(lambda c: c.first_valid_index()).max()
+    print(f"\n[INFO] Full history:    {results_df.index[0].date()} → "
+          f"{results_df.index[-1].date()}")
+    print(f"[INFO] ML-comparable window starts: {ml_start.date()} "
+          f"({(results_df.index >= ml_start).sum()} trading days)")
+
+    results_aligned = results_df.loc[ml_start:]
+
+    # ── 7. Evaluation ─────────────────────────────────────────────────────────
+    print("\nGenerating plots...")
+    plot_performance(results_aligned, RESULTS_DIR)
+    plot_rolling_sharpe(results_aligned, RESULTS_DIR, risk_free_rate=RISK_FREE_RATE)
+    plot_regime_visualization(prices["SPY"], rf_regime, RESULTS_DIR)
+    plot_feature_importance(get_feature_importance(X_ml, y_ml), RESULTS_DIR)
+
+    # ── 8. Performance summary ────────────────────────────────────────────────
+    print("\n" + "=" * 90)
+    print(f"PERFORMANCE SUMMARY  (ML window: {ml_start.date()} → "
+          f"{results_aligned.index[-1].date()})")
+    print("=" * 90)
+    summary = compare_strategies(
+        {col: results_aligned[col] for col in results_aligned.columns},
+        risk_free_rate=RISK_FREE_RATE,
+    )
     try:
-        print(summary_df[cols].to_markdown(index=False))
+        print(summary.to_markdown())
     except ImportError:
-        print(summary_df[cols].to_string(index=False))
+        print(summary.to_string())
+
+    print("\n" + "=" * 90)
+    print(f"FULL HISTORY  ({results_df.index[0].date()} → {results_df.index[-1].date()}) "
+          f"— non-ML strategies only")
+    print("=" * 90)
+    non_ml_cols = ["1_EqualWeight_BuyHold", "2_SPY_BuyHold", "3_Momentum_Only"]
+    summary_full = compare_strategies(
+        {col: results_df[col].dropna() for col in non_ml_cols},
+        risk_free_rate=RISK_FREE_RATE,
+    )
+    try:
+        print(summary_full.to_markdown())
+    except ImportError:
+        print(summary_full.to_string())
+
 
 if __name__ == "__main__":
     main()

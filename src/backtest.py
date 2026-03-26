@@ -88,8 +88,11 @@ def run_backtest(
     net_returns   = gross_returns - tc_costs
 
     # Diagnostics
-    ann_to = turnover[turnover > 0].sum()  # approximate annual (if ~12 rebalances/yr)
+    total_to = turnover[turnover > 0].sum()
+    n_years  = n / 252
+    ann_to   = total_to / n_years
     print(f"  Backtest complete: {n} days, {rebalance_mask.sum()} rebalances. "
-          f"Total one-way turnover: {ann_to:.2f}x. "
-          f"Mean monthly TC drag: {tc_costs[tc_costs > 0].mean() * 10_000:.1f} bps.")
+        f"Annualized one-way turnover: {ann_to:.2f}x "
+        f"(cumulative: {total_to:.1f}x over {n_years:.1f}yr). "
+        f"Mean rebalance TC drag: {tc_costs[tc_costs > 0].mean() * 10_000:.1f} bps.")
     return net_returns
