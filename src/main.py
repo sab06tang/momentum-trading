@@ -20,7 +20,7 @@ from evaluation import (
     plot_feature_importance,
 )
 
-# ── Configuration ─────────────────────────────────────────────────────────────
+# configuration
 TICKERS        = ["SPY", "QQQ", "TLT", "GLD", "USO"]
 START_DATE     = "2010-01-01"
 RESULTS_DIR    = "results/figures/"
@@ -67,19 +67,19 @@ def main() -> None:
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    # ── 1. Data ───────────────────────────────────────────────────────────────
+    # data
     prices = load_data(TICKERS, START_DATE)
 
-    # ── 2. Features ───────────────────────────────────────────────────────────
+    # features
     features_daily = build_all_features(prices)
 
-    # ── 3. Momentum signals & base weights ───────────────────────────────────
+    # momentum signals & base weights
     signals      = generate_trend_signals(features_daily, TICKERS)
     base_weights = calculate_inverse_vol_weights(
         signals, features_daily, TICKERS, max_weight=MAX_ASSET_WEIGHT
     )
 
-    # ── 4. ML labels & walk-forward training ─────────────────────────────────
+    # ML labels & walk-forward training
     labels = create_labels(
     prices, base_weights,
     horizon=LABEL_HORIZON,
@@ -100,7 +100,7 @@ def main() -> None:
         X_ml, y_ml, model_type="logistic", horizon=LABEL_HORIZON
     )
 
-    # ── 5. ML regime scaling ──────────────────────────────────────────────────
+    # ML regime scaling
     print("\nBuilding ML regime signals...")
     rf_regime = build_ml_regime(rf_probs, base_weights.index)
     lr_regime = build_ml_regime(lr_probs, base_weights.index)
@@ -108,12 +108,12 @@ def main() -> None:
     ml_rf_weights = base_weights.multiply(rf_regime, axis=0)
     ml_lr_weights = base_weights.multiply(lr_regime, axis=0)
 
-    # ── 6. Backtests ──────────────────────────────────────────────────────────
-    # Trim daily_rets to the first date weights are available.           ← FIXED
-    # base_weights starts after the 252-day feature warmup (~1 year).
-    # Without this, run_backtest raises ValueError on leading NaN weights.
+    # backtests
+    # trim daily_rets to the first date weights are available
+    # base_weights starts after the 252-day feature warmup (~1 year)
+    # without this, run_backtest raises ValueError on leading NaN weightse
     weights_start = base_weights.index[0]
-    daily_rets = prices.pct_change().dropna().loc[weights_start:]       # ← FIXED
+    daily_rets = prices.pct_change().dropna().loc[weights_start:]
 
     print("\nRunning backtests...")
 
@@ -143,14 +143,14 @@ def main() -> None:
 
     results_aligned = results_df.loc[ml_start:]
 
-    # ── 7. Evaluation ─────────────────────────────────────────────────────────
+    # evaluation
     print("\nGenerating plots...")
     plot_performance(results_aligned, RESULTS_DIR)
     plot_rolling_sharpe(results_aligned, RESULTS_DIR, risk_free_rate=RISK_FREE_RATE)
     plot_regime_visualization(prices["SPY"], rf_regime, RESULTS_DIR)
     plot_feature_importance(get_feature_importance(X_ml, y_ml), RESULTS_DIR)
 
-    # ── 8. Performance summary ────────────────────────────────────────────────
+    # performance summary
     print("\n" + "=" * 90)
     print(f"PERFORMANCE SUMMARY  (ML window: {ml_start.date()} → "
           f"{results_aligned.index[-1].date()})")

@@ -71,8 +71,8 @@ def create_labels(
 
     else:  # "median" — expanding window, no lookahead
         # expanding().median() at time t uses only returns[0..t]
-        # This means early observations have noisy medians (small sample),
-        # but there is zero future leakage at any point in the series.
+        # this means early observations have noisy medians (small sample)
+        # but zero future leakage at any point in the series
         expanding_median = forward_returns.expanding(min_periods=horizon * 2).median()
         labels = (
             (forward_returns > expanding_median)
@@ -136,12 +136,12 @@ def train_and_predict_walk_forward(
         y_train = y_clean.iloc[train_idx]
         fold_sizes.append(len(X_train))
 
-        # Scaler is fold-local: no parameter bleed
+        # scaler is fold-local: no parameter bleed
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train)
         X_test_scaled  = scaler.transform(X_test)
 
-        if model_type == "rf":
+        if model_type == "rf": #random forest
             model = RandomForestClassifier(
                 n_estimators=200,
                 max_depth=3,

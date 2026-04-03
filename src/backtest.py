@@ -25,8 +25,8 @@ def run_backtest(
     target_weights : desired weights; must have daily index (forward-filled from monthly signal)
     tc             : one-way transaction cost in decimal (default 10 bps = 0.001)
     """
-    # --- Alignment and validation ---
-    # Forward-fill monthly target weights to daily index
+    # alignment and validation
+    # forward-fill monthly target weights to daily index
     target_weights = target_weights.reindex(returns.index).ffill()
     n_null = target_weights.isna().any(axis=1).sum()
     if n_null > 0:
@@ -39,11 +39,11 @@ def run_backtest(
     returns = returns.loc[common_idx]
     target_weights = target_weights.loc[common_idx]
 
-    # --- Rebalance schedule ---
+    # rebalance schedule
     eom_dates = returns.resample(pd.offsets.BusinessMonthEnd()).last().index
     rebalance_mask = returns.index.isin(eom_dates)
 
-    # --- Loop ---
+    # loop
     n = len(returns)
     n_assets = target_weights.shape[1]
 
@@ -56,8 +56,8 @@ def run_backtest(
 
     for i in range(n):
         if i > 0:
-            # Drift by TODAY's return → produces correct end-of-day-i weights
-            # (used with shift(1) to earn tomorrow's return)
+            # drift by TODAY's return so that it produces correct end-of-day-i weights
+            # used with shift(1) to earn tomorrow's return
             portfolio_ret_i = np.nansum(current_w * ret_vals[i])
             total_value     = 1.0 + portfolio_ret_i   # cash earns 0
             if total_value > 1e-8:
@@ -65,7 +65,7 @@ def run_backtest(
             else:
                 current_w = np.zeros(n_assets)
 
-        # Rebalance at EOM close (or initialize at day 0)
+        # rebalance at EOM close aka initialize at day 0
         if i == 0 or rebalance_mask[i]:
             target = target_vals[i]
             to = np.nansum(np.abs(target - current_w))
@@ -77,7 +77,7 @@ def run_backtest(
 
         actual_weights[i] = current_w
 
-    # --- Returns ---
+    # returns
     actual_weights_df = pd.DataFrame(
         actual_weights, index=returns.index, columns=returns.columns
     )
@@ -87,7 +87,7 @@ def run_backtest(
     tc_costs      = pd.Series(turnover, index=returns.index) * tc
     net_returns   = gross_returns - tc_costs
 
-    # Diagnostics
+    # diagnostics
     total_to = turnover[turnover > 0].sum()
     n_years  = n / 252
     ann_to   = total_to / n_years

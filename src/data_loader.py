@@ -37,7 +37,7 @@ def load_data(
 
     prices = raw["Close"]
 
-    # Normalize single-ticker download (Series → DataFrame)
+    # normalize single-ticker download from Series to DataFrame
     if isinstance(prices, pd.Series):
         prices = prices.to_frame(name=tickers[0])
 

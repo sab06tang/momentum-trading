@@ -73,7 +73,7 @@ def calculate_inverse_vol_weights(
     row_sums = raw.sum(axis=1)
     weights = raw.div(row_sums.where(row_sums != 0, other=np.nan), axis=0).fillna(0.0)
 
-    # Cap and renormalize
+    # cap and renormalize
     weights = weights.clip(upper=max_weight)
     row_sums_post = weights.sum(axis=1)
     weights = weights.div(

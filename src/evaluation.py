@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 
-# ── Metrics ──────────────────────────────────────────────────────────────────
+# metrics
 
 def calculate_metrics(
     returns: pd.Series,
@@ -99,7 +99,7 @@ def compare_strategies(
     return display
 
 
-# ── Plots ─────────────────────────────────────────────────────────────────────
+# plots
 
 def _rolling_sharpe_series(
     returns: pd.Series,
@@ -118,13 +118,13 @@ def plot_performance(returns_df: pd.DataFrame, save_dir: str) -> None:
     """
     os.makedirs(save_dir, exist_ok=True)
 
-    # Align to common start (latest first valid date across all strategies)
+    # align to latest first valid date across all strategies
     first_valid = returns_df.apply(lambda c: c.first_valid_index()).max()
     aligned = returns_df.loc[first_valid:].dropna(how="all")
 
     cum = (1 + aligned).cumprod() * 100
 
-    # Equity curves
+    # equity curves
     fig, ax = plt.subplots(figsize=(13, 6))
     for col in cum.columns:
         ax.plot(cum.index, cum[col], label=col, linewidth=1.5)
@@ -137,7 +137,7 @@ def plot_performance(returns_df: pd.DataFrame, save_dir: str) -> None:
     fig.savefig(os.path.join(save_dir, "equity_curve.png"), dpi=150)
     plt.close(fig)
 
-    # Drawdown chart
+    # drawdown chart
     fig, ax = plt.subplots(figsize=(13, 4))
     for col in cum.columns:
         dd = (cum[col] / cum[col].cummax()) - 1
@@ -190,7 +190,7 @@ def plot_regime_visualization(
     """
     os.makedirs(save_dir, exist_ok=True)
 
-    # Auto-detect and threshold probabilities
+    # auto-detect and threshold probabilities
     is_prob = regime_signal.between(0, 1).all() and not set(regime_signal.dropna().unique()).issubset({0, 1})
     if is_prob:
         regime_binary = (regime_signal > 0.5).astype(int)

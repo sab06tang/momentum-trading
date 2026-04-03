@@ -5,7 +5,7 @@ import numpy as np
 def calculate_momentum_features(prices: pd.DataFrame) -> pd.DataFrame:
     """
     Rolling returns at 1m, 3m, 6m, 12m horizons (21, 63, 126, 252 trading days).
-    No shift applied here — caller is responsible for lagging before use.
+    No shift applied here, caller is responsible for lagging before use.
     """
     chunks = []
     windows = [21, 63, 126, 252]  # 1m, 3m, 6m, 12m
@@ -62,7 +62,7 @@ def build_all_features(prices: pd.DataFrame) -> pd.DataFrame:
     """
     Compiles all features. Returns unshifted features aligned to their natural date.
 
-    IMPORTANT: Features at row t use price data up to and including day t.
+    Features at row t use price data up to and including day t.
     Callers MUST shift by the appropriate lag before using as predictors
     (e.g., .shift(1) in a daily backtest, or resample-then-shift(1) in monthly).
 
@@ -76,7 +76,7 @@ def build_all_features(prices: pd.DataFrame) -> pd.DataFrame:
         calculate_cross_asset_features(prices),
     ], axis=1)
 
-    # Guard against inf values from adjusted price edge cases
+    # guard against inf values from adjusted price edge cases
     raw = raw.replace([np.inf, -np.inf], np.nan)
 
     n_before = len(raw)
@@ -85,7 +85,7 @@ def build_all_features(prices: pd.DataFrame) -> pd.DataFrame:
           f"Usable days: {len(features)} "
           f"(from {features.index[0].date()})")
 
-    # Warn if non-contiguous index (mid-series gap — would break downstream .shift())
+    # warn if non-contiguous index (mid-series gap — would break downstream .shift())
     gaps = features.index.to_series().diff().dt.days.dropna()
     large_gaps = gaps[gaps > 5]
     if not large_gaps.empty:
