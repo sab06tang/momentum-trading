@@ -21,9 +21,9 @@ contribution.
 
 > **Key finding:** The momentum-only strategy achieves the highest risk-adjusted
 > performance (Sharpe 0.79, Sortino 1.00), outperforming SPY on every
-> risk-adjusted metric while incurring a smaller maximum drawdown (−24.8% vs
+> risk-adjusted metric and incurring a smaller maximum drawdown (−24.8% vs
 > −33.7%). The ML regime filter reduces volatility but also reduces returns
-> sufficiently to lower the Sharpe ratio — a valid and expected result in a
+> sufficiently to lower the Sharpe ratio, which is a valid and expected result in a
 > predominantly trending market (discussed below).
 
 ---
@@ -142,8 +142,7 @@ Momentum + RF           →  Sharpe 0.60  (−0.19 vs momentum only)
 ```
 
 **Interpretation:** The ML overlay does not add value over the 2011–2026 sample
-period. This is a statistically honest result, not an implementation failure.
-Three mechanisms explain it:
+period. This is likely because of the following three reasons:
 
 1. **Bull market bias.** The ML filter reduces gross exposure (active 83–94% of
    days). In a period where momentum almost always pays, reducing exposure
@@ -161,7 +160,7 @@ Three mechanisms explain it:
    strategies incur approximately 15× more rebalance turnover than the
    momentum-only strategy (~7x vs ~0.5x annualised one-way).
 
-The correct conclusion is that **the momentum signal itself is the alpha
+Based on the above analysis, I conclude that **the momentum signal itself is the alpha
 source**, and that ML regime filtering requires either a longer history spanning
 multiple full cycles, or a better-specified prediction target (e.g. tail-risk
 drawdown events rather than median forward return).
@@ -202,8 +201,7 @@ and avoids massive drag during equity bull markets.
 
 **Why inverse-volatility weighting?**  
 Inverse-vol normalises each position's risk contribution without requiring a
-full covariance matrix estimate (which is noisy in a 5-asset universe). It is
-the standard position-sizing approach in AQR-style momentum strategies.
+full covariance matrix estimate (which is noisy in a 5-asset universe).
 
 **Why composite z-score across lookbacks?**  
 Single-lookback momentum is sensitive to the chosen window. Averaging
@@ -239,16 +237,3 @@ to the current market regime while maintaining strict temporal separation.
 - **Transaction cost sensitivity:** A TC sweep (0–30 bps) would show the
   breakeven cost at which each strategy becomes unviable — relevant for
   comparing futures vs. ETF implementation.
-
----
-
-## References
-
-- Jegadeesh, N. & Titman, S. (1993). *Returns to Buying Winners and Selling
-  Losers.* Journal of Finance.
-- Asness, C., Moskowitz, T. & Pedersen, L. (2013). *Value and Momentum
-  Everywhere.* Journal of Finance.
-- Moskowitz, T., Ooi, Y. & Pedersen, L. (2012). *Time Series Momentum.*
-  Journal of Financial Economics.
-- Hurst, B., Ooi, Y. & Pedersen, L. (2017). *A Century of Evidence on
-  Trend-Following Investing.* AQR White Paper.
