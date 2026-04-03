@@ -1,4 +1,4 @@
-# Cross-Asset Time-Series Momentum with ML Regime Filter
+# Cross-Asset Time-Series Momentum Trading with ML Regime Filter
 
 A quantitative trading strategy combining systematic momentum signals across a
 multi-asset universe with a machine learning regime overlay. Built to
