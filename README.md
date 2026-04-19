@@ -1,10 +1,10 @@
-# Cross-Asset Time-Series Momentum Trading with ML Regime Filter
+# Cross-Asset Momentum Trading: Cross-Sectional, Time-Series, and ML Regime Filter
 
-A quantitative trading strategy combining systematic momentum signals across a
-multi-asset universe with a machine learning regime overlay. Built to
+A quantitative trading framework comparing three systematic strategies across a
+multi-asset universe: cross-sectional momentum, time-series momentum with a
+trailing stop-loss, and a machine learning regime overlay. Built to
 institutional standards: walk-forward validation, explicit signal lagging,
-transaction cost modelling, and a clean ablation study isolating the ML
-contribution.
+transaction cost modelling, and a clean ablation study.
 
 ---
 
@@ -14,21 +14,31 @@ contribution.
 |:---|---:|---:|---:|---:|---:|---:|
 | Equal-Weight Buy & Hold | 8.4% | 12.0% | 0.57 | 0.70 | -25.3% | 0.33 |
 | SPY Buy & Hold | 13.4% | 17.1% | 0.70 | 0.81 | -33.7% | 0.40 |
-| **Momentum Only** | **12.3%** | **13.2%** | **0.79** | **1.00** | **-24.8%** | **0.50** |
+| **Cross-Sectional Momentum** | **12.3%** | **13.2%** | **0.79** | **1.00** | **-24.8%** | **0.50** |
 | Momentum + Logistic Reg. | 7.9% | 11.2% | 0.55 | 0.60 | -24.8% | 0.32 |
 | Momentum + Random Forest | 8.9% | 11.9% | 0.60 | 0.68 | -24.8% | 0.36 |
+| TS Momentum + Stop-Loss | TBD | TBD | TBD | TBD | TBD | TBD |
 | Random Sanity Check | 7.0% | 15.1% | 0.39 | 0.42 | -33.3% | 0.21 |
 
-> **Key finding:** The momentum-only strategy achieves the highest risk-adjusted
+> **Key finding:** Cross-sectional momentum achieves the highest risk-adjusted
 > performance (Sharpe 0.79, Sortino 1.00), outperforming SPY on every
 > risk-adjusted metric and incurring a smaller maximum drawdown (−24.8% vs
 > −33.7%). The ML regime filter reduces volatility but also reduces returns
 > sufficiently to lower the Sharpe ratio, which is a valid and expected result in a
-> predominantly trending market (discussed below).
+> predominantly trending market (discussed below). Time-series momentum results
+> are pending a full backtest run.
 
 ---
 
 ## Strategy Architecture
+
+Three strategies are compared in the ablation study:
+
+1. **Cross-Sectional Momentum** — ranks assets relative to each other using composite z-scores across four lookback windows (1m/3m/6m/12m). Long the relatively strongest assets, flat on the weakest.
+2. **Time-Series Momentum with Stop-Loss** — evaluates each asset independently; long if its own 12m return is positive. A 10% trailing stop-loss (based on 252-day rolling drawdown) overrides the signal to limit drawdown exposure.
+3. **ML Regime Overlay** — applied on top of cross-sectional momentum; scales position sizes down when a classifier predicts an unfavorable forward return regime.
+
+---
 
 ### Universe
 Five liquid ETFs providing cross-asset exposure:
@@ -42,11 +52,17 @@ Five liquid ETFs providing cross-asset exposure:
 | USO | Crude Oil | Commodity momentum |
 
 ### Signal Generation
-Composite momentum score averaging cross-sectional z-scores across four
-lookback windows (1m / 3m / 6m / 12m). Cross-sectional z-scoring at each date
-ensures the signal captures *relative* momentum strength across assets, not just
-absolute direction. Binary long/flat signal: long when composite z-score > 0,
+
+**Cross-sectional momentum:** Composite score averaging cross-sectional z-scores
+across four lookback windows (1m / 3m / 6m / 12m). Cross-sectional z-scoring at
+each date ensures the signal captures *relative* momentum strength across assets,
+not just absolute direction. Binary long/flat signal: long when composite z-score > 0,
 flat (cash) otherwise.
+
+**Time-series momentum:** Each asset is evaluated independently — long if its own
+12m return is positive, flat otherwise. A 10% trailing stop-loss based on the
+252-day rolling drawdown overrides the momentum signal to exit positions during
+sharp drawdowns, regardless of the trend signal.
 
 ### Position Sizing
 Inverse-volatility weighting using 63-day realised volatility, capped at 40%
@@ -174,7 +190,8 @@ momentum-trading/
 ├── src/
 │   ├── data_loader.py          # yfinance download, adjusted prices, validation
 │   ├── features.py             # momentum, MA, vol, drawdown, dispersion features
-│   ├── momentum_strategy.py    # composite z-score signals, inv-vol weighting
+│   ├── momentum_strategy.py    # cross-sectional z-score signals, inv-vol weighting
+│   ├── ts_momentum_strategy.py # time-series momentum with trailing stop-loss
 │   ├── ml_model.py             # label creation, walk-forward training, importances
 │   ├── backtest.py             # vectorised backtest, daily drift, TC modelling
 │   ├── evaluation.py           # metrics, ablation table, all visualisations
@@ -192,6 +209,9 @@ momentum-trading/
 
 
 ## Key Design Decisions
+
+**Cross-sectional vs. time-series momentum — what's the difference?**  
+Cross-sectional momentum asks "which asset is strongest *relative to the others*?" and always holds the relatively best assets. Time-series momentum asks "is this asset trending *in absolute terms*?" — it's possible for all assets to be simultaneously long or simultaneously flat. The stop-loss in the time-series variant adds a third override: exit even a trending asset if it has already fallen 10% from its recent high.
 
 **Why long/flat, not long/short?**  
 Shorting individual asset ETFs introduces significant borrow costs and
