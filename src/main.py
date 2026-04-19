@@ -6,11 +6,11 @@ from data_loader import load_data
 from features import build_all_features
 from momentum_strategy import (
     generate_trend_signals,
-    generate_timeseries_momentum_signals,
     calculate_inverse_vol_weights,
     generate_equal_weight_baseline,
     generate_random_strategy,
 )
+from ts_momentum_strategy import generate_timeseries_momentum_signals
 from ml_model import create_labels, train_and_predict_walk_forward, get_feature_importance
 from backtest import run_backtest
 from evaluation import (
